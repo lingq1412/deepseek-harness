@@ -1,0 +1,107 @@
+name: Desktop Windows Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      mandatory_update_origin:
+        description: >-
+          HTTPS origin used by the mandatory-update policy service, for example
+          https://updates.example.com
+        required: true
+        type: string
+      auth_origin:
+        description: HTTPS origin used by the test login flow
+        required: true
+        type: string
+      build_version:
+        description: Optional Desktop build version; leave empty to use the package version
+        required: false
+        type: string
+      npm_registry:
+        description: Optional HTTPS npm registry mirror
+        required: false
+        default: https://registry.npmjs.org/
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DSH_TELEMETRY_DISABLED: '1'
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  package:
+    name: Package Windows x64 installer
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Write unsigned Desktop configuration
+        shell: pwsh
+        env:
+          MANDATORY_UPDATE_ORIGIN: ${{ inputs.mandatory_update_origin }}
+          AUTH_ORIGIN: ${{ inputs.auth_origin }}
+          NPM_REGISTRY: ${{ inputs.npm_registry }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $policy = @{ allowedAuthOrigins = @($env:AUTH_ORIGIN) } | ConvertTo-Json -Compress
+          @(
+            'DSH_DESKTOP_APP_ID=com.deepseek.harness'
+            'DSH_DESKTOP_AUTO_UPDATE_ENV=test'
+            "DSH_DESKTOP_NPM_REGISTRY=$env:NPM_REGISTRY"
+            "DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=$env:MANDATORY_UPDATE_ORIGIN"
+            "DSH_DESKTOP_MANDATORY_UPDATE_CONFIG=$policy"
+          ) | Set-Content -LiteralPath apps/desktop/.env.windows -Encoding utf8NoBOM
+
+      - name: Validate unsigned package configuration
+        run: pnpm --dir apps/desktop run check:package -- --unsigned
+
+      - name: Build unsigned Windows installer
+        shell: pwsh
+        env:
+          BUILD_VERSION: ${{ inputs.build_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arguments = @('run', 'package:desktop:win:x64:unsigned')
+          if (-not [string]::IsNullOrWhiteSpace($env:BUILD_VERSION)) {
+            $arguments += @('--', '--build-version', $env:BUILD_VERSION)
+          }
+          pnpm @arguments
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-desktop-windows-x64-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 14
+          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/**/*
+
+      - name: Upload packaging diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-desktop-windows-x64-diagnostics-${{ github.run_number }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: apps/desktop/.desktop-build/packaging-runs/**/*
