@@ -82,12 +82,29 @@ jobs:
         env:
           BUILD_VERSION: ${{ inputs.build_version }}
         run: |
-          $ErrorActionPreference = 'Stop'
+          $ErrorActionPreference = 'Continue'
           $arguments = @('run', 'package:desktop:win:x64:unsigned')
           if (-not [string]::IsNullOrWhiteSpace($env:BUILD_VERSION)) {
             $arguments += @('--', '--build-version', $env:BUILD_VERSION)
           }
           pnpm @arguments
+          $packageExitCode = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+
+          $artifactDirectory = 'apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts'
+          $installers = @(
+            Get-ChildItem -LiteralPath $artifactDirectory `
+              -Filter 'deepseek-harness-*-win-x64-unsigned.exe' `
+              -File `
+              -ErrorAction SilentlyContinue
+          )
+          if ($installers.Count -eq 0) {
+            throw "Desktop packaging failed with exit code $packageExitCode and produced no Windows installer."
+          }
+          if ($packageExitCode -ne 0) {
+            Write-Warning "Desktop packaging returned exit code $packageExitCode after producing the installer; uploading the generated installer with diagnostics."
+          }
+          $installers | ForEach-Object { Write-Host "Windows installer: $($_.FullName)" }
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
@@ -95,7 +112,7 @@ jobs:
           name: dsh-desktop-windows-x64-${{ github.run_number }}
           if-no-files-found: error
           retention-days: 14
-          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/**/*
+          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe
 
       - name: Upload packaging diagnostics
         if: always()
