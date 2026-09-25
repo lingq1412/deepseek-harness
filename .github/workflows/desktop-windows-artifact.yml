@@ -105,6 +105,8 @@ jobs:
             Write-Warning "Desktop packaging returned exit code $packageExitCode after producing the installer; uploading the generated installer with diagnostics."
           }
           $installers | ForEach-Object { Write-Host "Windows installer: $($_.FullName)" }
+          # pnpm 的非零退出码会保留在 LASTEXITCODE；安装包存在时显式将步骤标记为成功。
+          exit 0
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
